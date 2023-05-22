@@ -124,9 +124,9 @@ void loadTriMesh(const string& filename) {
 void meshCutGrid() {
     tetMesh.nodes_.clear();
     tetMesh.mesh_.clear();
-    int width = 23;
-    int height = 23;
-    int depth = 23;
+    int width = 5;
+    int height = 5;
+    int depth = 5;
     T low = -0.5;
     T high = 0.5;
     T left = -0.5;

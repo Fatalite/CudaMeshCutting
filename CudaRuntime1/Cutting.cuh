@@ -1,47 +1,85 @@
 #ifndef Cutting_h
 #define Cutting_h
 #include <chrono>
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
 #include "DataStructures.cuh"
-
+#define CUDA_CHECK(val) { \
+    if (val != cudaSuccess) { \
+        fprintf(stderr, "Error %s at line %d in file %s\n", cudaGetErrorString(val), __LINE__, __FILE__); \
+        exit(1); \
+    } \
+}
 __global__
 void vecAddKernel(const float* A, const float* B, float* C, int numElements)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (i < numElements)
+    if (i < numElements) {
+
         C[i] = A[i] + B[i];
+    }
 }
-typedef std::array<int, 1> I1;
-typedef std::array<int, 2> I2;
-typedef std::array<int, 3> I3;
-typedef std::array<int, 4> I4;
-typedef std::array<int, 5> I5;
-typedef std::array<double, 2> D2;
-typedef std::array<double, 3> D3;
-typedef std::array<double, 4> D4;
-__global__
+
+//CUDA DEVICE CODE
 template<typename T>
-void computeIntersection(const array<D3, 4>* nodes1, const array<D3, 1>* nodes2, array<double, 4>* w, bool b, int numElements) {
+__device__ void Dot(T* result, const T* a, const T* b, int size) {
+    for (int i = 0; i < size; ++i) {
+        (*result) += a[i] * b[i];
+    }
+}
+
+template<typename T>
+__device__ void Cross(T* result, const T* a, const T* b) {
+    result[0] = a[1] * b[2] - a[2] * b[1];
+    result[1] = a[2] * b[0] - a[0] * b[2];
+    result[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+template<typename T>
+__device__ void Subtract(T* result, const T* a, const T* b, int size) {
+    for (int i = 0; i < size; ++i)
+        result[i] = a[i] - b[i];
+}
+
+template<typename T>
+__device__ void Volume(const T* node1, const T* node2, const T* node3, const T* node4, T* nodeReturn) {
+    T temp1[3], temp2[3], temp3[3], cross_result[3];
+   //printf("%f", node1);
+    Subtract(temp1, node2, node1, 3);
+    Subtract(temp2, node3, node1, 3);
+    Subtract(temp3, node4, node1, 3);
+    Cross(cross_result, temp1, temp2);
+    //printf("%f", cross_result);
+    Dot( nodeReturn,cross_result, temp3, 3);
+}
+
+template<typename T>
+__global__
+void computeIntersectionCUDA(T* nodes1, T* nodes2, T* w1, T* w2, bool* b, int numElements) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < numElements) {
-        T v1 = Volume<T>(&nodes1[0], &nodes1[1], &nodes1[2], &nodes2[0]);
-        T v2 = Volume<T>(&nodes1[0], &nodes1[2], &nodes1[3],&nodes2[0]);
-        T v3 = Volume<T>(&nodes1[0], &nodes1[3], &nodes1[1], &nodes2[0]);
-        T v4 = Volume<T>(&nodes2[0], &nodes1[1], &nodes1[2], &nodes1[3]);
-
-        if ((v1 > 0) == (v2 > 0) && (v2 > 0) == (v3 > 0) && (v3 > 0) == (v4 > 0)) {
-            T v = fabs(v1) + fabs(v2) + fabs(v3) + fabs(v4);
-            w[0] = fabs(v4) / v;
-            w[1] = fabs(v2) / v;
-            w[2] = fabs(v3) / v;
-            w[3] = 1 - w[0] - w[1] - w[2];
-            b = true;
+        T v1, v2, v3, v4, v5;
+        //printf("%f", v1[0]);
+        Volume<T>(&nodes1[i * 6 + 0], &nodes2[0], &nodes2[3], &nodes2[6], &v1);
+        Volume<T>(&nodes1[i * 6 + 3], &nodes2[0], &nodes2[3], &nodes2[6], &v2);
+        Volume<T>(&nodes1[i * 6 + 0], &nodes1[i * 6 + 3], &nodes2[0], &nodes2[3], &v3);
+        Volume<T>(&nodes1[i * 6 + 0], &nodes1[i * 6 + 3], &nodes2[3], &nodes2[6], &v4);
+        Volume<T>(&nodes1[i * 6 + 0], &nodes1[i * 6 + 3], &nodes2[6], &nodes2[0], &v5);
+        
+        if (v1 * v2 < 0 && (v3 > 0) == (v4 > 0) && (v4 > 0) == (v5 > 0)) {
+            w1[i * 4 + 0] = fabs(v2) / (fabs(v1) + fabs(v2));
+            w1[i * 4 + 1] = 1 - w1[0];
+            T v = fabs(v3) + fabs(v4) + fabs(v5);
+            w2[i * 4 + 0] = fabs(v4) / v;
+            w2[i * 4 + 1] = fabs(v5) / v;
+            w2[i * 4 + 2] = 1 - w2[i * 4 + 0] - w2[i * 4 + 1];
+            b[i] = true;
         }
         else {
-            b = false;
+            b[i] =  false;
         }
-        b = false;
     }
 
 }
@@ -84,7 +122,7 @@ class Cutter3D {
             w2[0] = fabs(v4) / v;
             w2[1] = fabs(v5) / v;
             w2[2] = 1 - w2[0] - w2[1];
-            //cout << w1[0] << endl;
+            printf("%f, %f", w1[0], w1[1]);
             return true;
         }
         else {
@@ -96,13 +134,16 @@ class Cutter3D {
         array<T, 3> w1;
         return computeIntersection(nodes1, nodes2, w, w1);
     }
-
+    struct EdgeTriangle {
+        float FirstPointXOfEdge;
+        float FirstPointYOfEdge;
+        float FirstPointZOfEdge;
+    };
     static bool computeIntersection(const array<T3, 3>& nodes1, const array<T3, 2>& nodes2, array<T, 3>& w) {
         array<T, 2> w1;
         return computeIntersection(nodes2, nodes1, w1, w);
     }
-    
-
+   
     static bool computeIntersection(const array<T3, 4>& nodes1, const array<T3, 1>& nodes2, array<T, 4>& w) {
         T v1 = volume<T>(nodes1[0], nodes1[1], nodes1[2], nodes2[0]);
         T v2 = volume<T>(nodes1[0], nodes1[2], nodes1[3], nodes2[0]);
@@ -125,33 +166,131 @@ class Cutter3D {
         }
         return false;
     }
+    struct TetNodesEdges {
 
+    };
     template<int d1, int d2>
     static void computeIntersections(const vector<T3>& nodes1, const vector<T3>& nodes2, 
         const vector<array<int, d1>>& e1, const vector<array<int, d2>>& e2, 
         const BoxHierarchy<T, 3>& b1, const BoxHierarchy<T, 3>& b2, map<I4, T4>& intersections) {
-
-        vector<vector<int>> intersectingBoxes; // intersecting boxes
-        b1.intersect(b2, intersectingBoxes);
-        //Parallel Processing
         
-        for (size_t i = 0; i < intersectingBoxes.size(); ++i) {
-            
-            // Allocate CUDA events for estimating
-            cudaEvent_t start, stop;
-            CUDA_CHECK(cudaEventCreate(&start));
-            CUDA_CHECK(cudaEventCreate(&stop));
+        vector<vector<int>> intersectingBoxes; // intersecting boxes
+        if (d1 == 2 && d2 == 3) {
+            b2.intersect(b1, intersectingBoxes);
+        }
+        else {
+            b1.intersect(b2, intersectingBoxes);
+        }
+        for (size_t i = 0; i < intersectingBoxes.size()-1; i++) {
 
-            // Launch the Vector Add CUDA Kernel
-            int ThreadsPerBlock = 256;
-            int BlocksPerKernelGrid = (intersectingBoxes[i].size() + ThreadsPerBlock - 1) / ThreadsPerBlock;
-            computeIntersection<<< BlocksPerKernelGrid, ThreadsPerBlock>>>(, intersectingBoxes[i].size())
-            //auto tetNodes = elementNodes<T, 3, d1>(nodes1, e1[i]);
-            //auto triNodes = elementNodes<T, 3, d2>(nodes2, e2[j]);
-            computeIntersection(tetNodes, triNodes, w, b, intersectingBoxes[i].size()) {
-                intersections[toI4<int, d1>(e1[i])] = toI4<T, d1>(w, 0);
+            //Edge and Triangle Case
+            //Using Cuda Intersections
+            if (d1 == 2 && d2 == 3) {
+                //2 point(= 1 Edge) and Geometry Point
+                //2 * 3
+                //Assign
+                int Size = intersectingBoxes[i].size();
+                if (Size == 0) continue;
+                float* TetNodesForEdge = new  float[6 * Size];
+                float* d_TetNodesForEdge;// = new float[6];
+                float* TriNodesForTriangle = new float[9];
+                float* d_TriNodesForTriangle;// = new float[9 * Size];
+                float* w1 = new float[4 * Size];
+                float* d_w1;// = new float[4 * Size];
+                float* w2 = new float[4 * Size];
+                float* d_w2;// = new float[4 * Size];
+                bool* ba = new bool[Size];
+                bool* d_ba;// = new bool[4 * Size];
+
+
+                // 000 000 | 000 000 ||
+                int idx = 0;
+                for (int u = 0; u < 3; u++) {
+                    TriNodesForTriangle[0 + u] = nodes2[e2[i][0]][u];
+                    TriNodesForTriangle[3 + u] = nodes2[e2[i][1]][u];
+                    TriNodesForTriangle[6 + u] = nodes2[e2[i][2]][u];
+                }
+                // 000 000 000 | 000 000 000 | 000 000 000 || ....
+                for (auto j : intersectingBoxes[i]) {
+                    for (int m = 0; m < 3; m++) {
+                        TetNodesForEdge[idx * 6 + 0 + m] = nodes1[e1[j][0]][m];
+                        TetNodesForEdge[idx * 6 + 3 + m] = nodes1[e1[j][1]][m];
+                    }
+                    idx++;
+                }
+
+                //Device Allocation
+                CUDA_CHECK(cudaMalloc((void**)&d_TetNodesForEdge, sizeof(float) * 6 * Size));
+                CUDA_CHECK(cudaMalloc((void**)&d_TriNodesForTriangle, sizeof(float) * 9));
+                CUDA_CHECK(cudaMalloc((void**)&d_w1, sizeof(float) * Size * 4));
+                CUDA_CHECK(cudaMalloc((void**)&d_w2, sizeof(float) * Size * 4));
+                CUDA_CHECK(cudaMalloc((void**)&d_ba, sizeof(bool) * Size));
+
+                //Copy Host To Device
+                CUDA_CHECK(cudaMemcpy(d_TetNodesForEdge, TetNodesForEdge, sizeof(float) * Size * 6, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMemcpy(d_TriNodesForTriangle, TriNodesForTriangle, sizeof(float) *  9, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMemcpy(d_w1, w1, sizeof(float) * Size * 4, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMemcpy(d_w2, w2, sizeof(float) * Size * 4, cudaMemcpyHostToDevice));
+                CUDA_CHECK(cudaMemcpy(d_ba, ba, sizeof(bool) * Size, cudaMemcpyHostToDevice));
+
+                
+                //// Launch the Vector Add CUDA Kernel
+                int ThreadsPerBlock = 256;
+                int BlocksPerKernelGrid = (Size + ThreadsPerBlock - 1) / ThreadsPerBlock;
+
+                CUDA_CHECK(cudaDeviceSynchronize());
+
+                //Kernel Function Start
+                computeIntersectionCUDA << < BlocksPerKernelGrid, ThreadsPerBlock >> >
+                    (d_TetNodesForEdge, d_TriNodesForTriangle, d_w1, d_w2, d_ba, Size);
+
+                
+
+                // Copy Device To Host
+                CUDA_CHECK(cudaMemcpy(w1, d_w1, Size * sizeof(float) * 4, cudaMemcpyDeviceToHost));
+                CUDA_CHECK(cudaMemcpy(w2, d_w2, Size * sizeof(float) * 4, cudaMemcpyDeviceToHost));
+                CUDA_CHECK(cudaMemcpy(ba, d_ba, Size * sizeof(bool), cudaMemcpyDeviceToHost));
+                //Triangle to Edge
+                //size = one triangle to edge
+
+                CUDA_CHECK(cudaDeviceSynchronize());
+                CUDA_CHECK(cudaGetLastError());
+                
+                int u = 0;
+                for (auto j : intersectingBoxes[i]) {
+                    if (ba[u] == true) {
+                        array<int, 4> a;
+                        array<T, 4> w;
+                        cout << a[0] << " " << a[1] << endl;
+                        a[0] = e1[j][0];
+                        a[1] = e1[j][1];
+                        a[2] = 0;
+                        a[3] = 0;
+                        w[0] = w1[u * 4 + 0];
+                        w[1] = 1- w[0];
+                        w[2] = 0;
+                        w[3] = 0;
+                        intersections[a] = w;
+                    }
+                    u++;
+                }
+
+                //Host allocation
+                cudaFree(d_TetNodesForEdge);
+                cudaFree(d_TriNodesForTriangle);
+                cudaFree(d_w1);
+                cudaFree(d_w2);
+                cudaFree(d_ba);
+
+                //Host Deallocation
+                delete[] TetNodesForEdge;
+                delete[] ba;
+                delete[] TriNodesForTriangle;
+                delete[] w1;
+                delete[] w2;
+
+                continue;
             }
-            array<T, d1> w;
 
             for (auto j : intersectingBoxes[i]) {
                 auto tetNodes = elementNodes<T, 3, d1>(nodes1, e1[i]);

@@ -176,37 +176,7 @@ array<T, 3> cross(const array<T, 3>& a1, const array<T, 3>& a2) {
     }
     return s;
 }
-//CUDA DEVICE CODE
-template<typename T>
-__device__ T Dot(const T* a, const T* b, int size) {
-    T result = 0;
-    for (int i = 0; i < size; ++i)
-        result += a[i] * b[i];
-    return result;
-}
 
-template<typename T>
-__device__ void Cross(T* result, const T* a, const T* b) {
-    result[0] = a[1] * b[2] - a[2] * b[1];
-    result[1] = a[2] * b[0] - a[0] * b[2];
-    result[2] = a[0] * b[1] - a[1] * b[0];
-}
-
-template<typename T>
-__device__ void Subtract(T* result, const T* a, const T* b, int size) {
-    for (int i = 0; i < size; ++i)
-        result[i] = a[i] - b[i];
-}
-
-template<typename T>
-__device__ T Volume(const T* node1, const T* node2, const T* node3, const T* node4) {
-    T temp1[3], temp2[3], temp3[3], cross_result[3];
-    subtract(temp1, node2, node1, 3);
-    subtract(temp2, node3, node1, 3);
-    subtract(temp3, node4, node1, 3);
-    cross(cross_result, temp1, temp2);
-    return dot(cross_result, temp3, 3);
-}
 
 //CUDA DEVICE CODE
 template<typename T>
@@ -391,11 +361,17 @@ public:
             return;
         }
         stack<pair<BoxNode<T, d>*, BoxNode<T, d>*>> s;
+        //Stack start with Bvh1 Root and BVH2 Root
         s.push(pair<BoxNode<T, d>*, BoxNode<T, d>*>(root_, bh.root_));
+        //While Stack is not empty
         while (s.size()) {
+            //Pop Stack
             pair<BoxNode<T, d>*, BoxNode<T, d>*> top = s.top();
             s.pop();
+            //if(Popped element's BVH1's box and BVH2'S Box intersecting
             if (top.first->box_.intersects(top.second->box_)) {
+                //intersecting with BVH's n node <-> BVH2's k node
+                //is it leaf node
                 if (top.first->n_ != -1 && top.second->n_ != -1) {
                     intersectingElements[top.first->n_].push_back(top.second->n_);
                 }
@@ -495,6 +471,7 @@ array<array<int, 2>, 3> faceEdges(const array<int, 3>& face) {
     return edges;
 }
 
+//
 template<typename T, int d, int d1>
 array<array<T, d>, d1> elementNodes(const vector<array<T, d>>& nodes, const array<int, d1>& element) {
     array<array<T, d>, d1> ps;
